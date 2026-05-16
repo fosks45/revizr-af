@@ -1,0 +1,43 @@
+feature: 002-revizr
+title: Revizr — AI-Powered UK Exam Revision Platform
+type: new-feature
+status: in-build
+current_phase: 8
+current_squad: build
+submitted_at: 2026-05-15T00:00:00Z
+submitted_by: stu-fosks
+spec_signed_off_at: 2026-05-15T00:00:00Z
+target_repo_url: https://github.com/fosks45/revizr-af
+gates_passed:
+  - phase: 1
+    gate: discovery-go-no-go
+    status: proceed
+  - phase: 2
+    gate: market-viability
+    status: proceed
+  - phase: 2.5
+    gate: swot-synthesis-sign-off
+    status: passed
+  - phase: 3
+    gate: requirements-sign-off
+    status: passed
+  - phase: 4
+    gate: compliance-hard-stop
+    status: passed-with-conditions
+  - phase: 5
+    gate: platform-sign-off
+    status: passed
+  - phase: 6
+    gate: design-sign-off
+    status: passed
+  - phase: 7
+    gate: plan-sign-off
+    status: passed
+spec_sign_off_decisions:
+  parental_consent: parent-initiated account creation; under-17 cannot self-register
+  mark_schemes: confirmed included for all/almost all papers
+  ccea_wjec_coverage: confirmed full coverage
+  teacher_portal: removed entirely (no teachers or tutors in any version)
+  ai_marking_scope: v1 all question types; technical spike required as gate before Sprint 3
+  streak_mechanic: built behind feature flag; AADC Standard 6 review required before enabling
+  copyright_status: in progress; content serving gated per-board on clearance confirmation

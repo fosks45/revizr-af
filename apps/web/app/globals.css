@@ -1,0 +1,230 @@
+/**
+ * Revizr global styles.
+ * Token CSS custom properties injected by buildTokenCSS() in lib/tokens.ts,
+ * emitted into the :root block below via the root layout.
+ *
+ * Components MUST NOT use hex literals — use Tailwind semantic tokens only.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Token injection placeholder — populated by tokens.ts buildTokenCSS() */
+/* Actual values set in app/layout.tsx via <style> tag in <head> */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: var(--font-family-base);
+    /* Never override the browser base font size — allow user preferences */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-bg-page);
+    color: var(--color-text-primary);
+    line-height: 1.5;
+    min-height: 100dvh;
+  }
+
+  /* Global focus ring — WCAG 2.4.7 / 2.4.11 */
+  :focus-visible {
+    outline: 2px solid var(--color-focus-ring);
+    outline-offset: 2px;
+  }
+
+  /* Remove outline for mouse users while preserving for keyboard */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Links */
+  a {
+    color: var(--color-text-link);
+  }
+
+  a:visited {
+    color: var(--color-text-link-visited);
+  }
+
+  /* Headings — mobile-first, responsive via md breakpoint */
+  h1 {
+    font-size: 1.875rem; /* xl */
+    font-weight: 700;
+    line-height: 1.2;
+    color: var(--color-text-primary);
+    margin: 0 0 1rem;
+  }
+
+  @media (min-width: 768px) {
+    h1 {
+      font-size: 2.25rem; /* 2xl */
+    }
+  }
+
+  h2 {
+    font-size: 1.5rem; /* lg */
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--color-text-primary);
+    margin: 0 0 0.75rem;
+  }
+
+  @media (min-width: 768px) {
+    h2 {
+      font-size: 1.875rem; /* xl */
+    }
+  }
+
+  h3 {
+    font-size: 1.25rem; /* md */
+    font-weight: 600;
+    line-height: 1.35;
+    color: var(--color-text-primary);
+    margin: 0 0 0.5rem;
+  }
+
+  @media (min-width: 768px) {
+    h3 {
+      font-size: 1.5rem; /* lg */
+    }
+  }
+
+  /* Ensure images never overflow containers and prevent CLS */
+  img,
+  video {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Remove default button styles — components define their own */
+  button {
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  /* Minimum touch targets — WCAG 2.5.8 / token: touch-target-default */
+  button,
+  a,
+  [role="button"],
+  [role="checkbox"],
+  [role="radio"],
+  input[type="submit"],
+  input[type="button"],
+  input[type="reset"] {
+    min-height: 44px;
+  }
+
+  /* Mono font for mark scheme content */
+  .font-mono {
+    font-family: var(--font-family-mono);
+  }
+
+  /* Screen reader only utility (used by SkipLink and sr-only content) */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  .not-sr-only {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: normal;
+  }
+}
+
+@layer components {
+  /* Page container — max-width + horizontal padding from tokens */
+  .page-container {
+    width: 100%;
+    max-width: 75rem; /* 1200px */
+    margin-inline: auto;
+    padding-inline: 1rem; /* space-layout-page-horizontal */
+  }
+
+  @media (min-width: 1024px) {
+    .page-container {
+      padding-inline: 2rem; /* space-layout-page-horizontal-lg */
+    }
+  }
+
+  @media (min-width: 1440px) {
+    .page-container {
+      padding-inline: 4rem; /* space-layout-page-horizontal-xl */
+    }
+  }
+
+  /* Card */
+  .card {
+    background-color: var(--color-bg-surface);
+    border: 1px solid var(--color-border-default);
+    border-radius: 0.75rem; /* radius-card */
+    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.08),
+      0 1px 2px -1px rgba(0, 0, 0, 0.06); /* shadow-card */
+    padding: 1.5rem; /* space-component-padding-lg */
+  }
+
+  /* Input base */
+  .input-base {
+    width: 100%;
+    height: 48px;
+    padding: 0 1rem;
+    border: 1px solid var(--color-border-default);
+    border-radius: 0.5rem; /* radius-input */
+    background-color: var(--color-bg-surface);
+    color: var(--color-text-primary);
+    font-size: 1rem;
+    line-height: 1.5;
+    transition: border-color var(--duration-normal) var(--easing-standard),
+      box-shadow var(--duration-normal) var(--easing-standard);
+  }
+
+  .input-base::placeholder {
+    color: var(--color-text-placeholder);
+  }
+
+  .input-base:focus-visible {
+    outline: none;
+    border-color: var(--color-border-interactive);
+    box-shadow: 0 0 0 2px var(--color-focus-ring-offset),
+      0 0 0 4px var(--color-focus-ring);
+  }
+
+  .input-base[aria-invalid="true"] {
+    border-color: var(--color-border-error);
+  }
+
+  .input-base:disabled {
+    background-color: var(--color-bg-disabled);
+    border-color: var(--color-border-disabled);
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+  }
+}

@@ -1,0 +1,1895 @@
+openapi: "3.1.0"
+info:
+  title: Revizr API
+  version: "1.0.0"
+  description: |
+    Revizr backend API — exam revision platform for UK students (KS3, GCSE, A-Level, 11+).
+    All endpoints require Bearer JWT authentication unless noted as public.
+    Base URL: https://api.revizr.co.uk/v1
+  contact:
+    name: Revizr Engineering
+    email: engineering@revizr.co.uk
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.revizr.co.uk/v1
+    description: Production (eu-west-2)
+  - url: https://api.staging.revizr.co.uk/v1
+    description: Staging (eu-west-2)
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Access token issued by POST /auth/login or POST /auth/refresh.
+        Expires in 15 minutes. Pass in Authorization header as "Bearer <token>".
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: "VALIDATION_ERROR"
+        message:
+          type: string
+          example: "email is required"
+        details:
+          type: object
+          example: { "field": "email", "constraint": "format" }
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, expires_in]
+      properties:
+        access_token:
+          type: string
+          example: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiI4ZjI..."
+        refresh_token:
+          type: string
+          example: "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4..."
+        expires_in:
+          type: integer
+          description: Access token TTL in seconds
+          example: 900
+
+    UserProfile:
+      type: object
+      required: [id, email, display_name, role, age_band, locale, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+        email:
+          type: string
+          format: email
+          example: "amara@example.com"
+        display_name:
+          type: string
+          example: "Amara"
+        role:
+          type: string
+          enum: [student, parent, teacher]
+          example: "student"
+        age_band:
+          type: string
+          enum: [under13, 13to15, 16to18, adult]
+          example: "13to15"
+        locale:
+          type: string
+          example: "en-GB"
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-05-01T09:00:00Z"
+
+    Subject:
+      type: object
+      required: [id, user_id, subject_name, exam_board, level, is_active]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        user_id:
+          type: string
+          format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+        subject_name:
+          type: string
+          example: "Mathematics"
+        exam_board:
+          type: string
+          example: "AQA"
+        level:
+          type: string
+          enum: [11plus, ks3, gcse, alevel]
+          example: "gcse"
+        is_active:
+          type: boolean
+          example: true
+
+    DiagnosticUploadInitiated:
+      type: object
+      required: [job_id, upload_url, upload_expires_at, session_id]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "c9d8e7f6-a5b4-3c2d-1e0f-9a8b7c6d5e4f"
+        session_id:
+          type: string
+          format: uuid
+          example: "b7c6d5e4-f3a2-1b0c-9d8e-7f6a5b4c3d2e"
+        upload_url:
+          type: string
+          format: uri
+          description: Presigned S3 PUT URL. Browser uploads file directly to this URL. Expires in 15 minutes.
+          example: "https://revizr-uploads.s3.eu-west-2.amazonaws.com/uploads/c9d8e7f6-...?X-Amz-Signature=..."
+        upload_expires_at:
+          type: string
+          format: date-time
+          example: "2026-05-15T10:15:00Z"
+
+    JobStatus:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "c9d8e7f6-a5b4-3c2d-1e0f-9a8b7c6d5e4f"
+        status:
+          type: string
+          enum: [pending, processing, complete, failed]
+          example: "processing"
+        progress_pct:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 45
+        error_message:
+          type: string
+          nullable: true
+          example: null
+
+    WeaknessResult:
+      type: object
+      required: [topic_tag, weakness_score]
+      properties:
+        topic_tag:
+          type: string
+          example: "algebra"
+        weakness_score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: 0.0 = strength, 1.0 = significant weakness
+          example: 0.75
+
+    DiagnosticResults:
+      type: object
+      required: [session_id, results]
+      properties:
+        session_id:
+          type: string
+          format: uuid
+          example: "b7c6d5e4-f3a2-1b0c-9d8e-7f6a5b4c3d2e"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/WeaknessResult"
+
+    Question:
+      type: object
+      required: [id, board, level, subject, topic_tags, question_text, max_marks, question_type]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "11223344-5566-7788-99aa-bbccddeeff00"
+        board:
+          type: string
+          example: "AQA"
+        level:
+          type: string
+          enum: [11plus, ks3, gcse, alevel]
+          example: "gcse"
+        subject:
+          type: string
+          example: "Mathematics"
+        year:
+          type: integer
+          example: 2023
+        paper_ref:
+          type: string
+          example: "8300/1H"
+        topic_tags:
+          type: array
+          items:
+            type: string
+          example: ["algebra", "quadratics"]
+        question_text:
+          type: string
+          example: "Solve x² + 5x + 6 = 0"
+        mark_scheme_text:
+          type: string
+          example: "x = -2 or x = -3 (M1, A1)"
+        max_marks:
+          type: integer
+          example: 2
+        question_type:
+          type: string
+          enum: [multiple_choice, short_answer, extended_answer]
+          example: "short_answer"
+        image_refs:
+          type: array
+          items:
+            type: string
+          example: []
+
+    PracticeSession:
+      type: object
+      required: [id, user_id, subject_id, status, started_at, question_count]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a"
+        user_id:
+          type: string
+          format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+        subject_id:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        status:
+          type: string
+          enum: [active, completed, abandoned]
+          example: "active"
+        started_at:
+          type: string
+          format: date-time
+          example: "2026-05-15T09:30:00Z"
+        ended_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+        question_count:
+          type: integer
+          example: 10
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuestionAttempt"
+
+    QuestionAttempt:
+      type: object
+      required: [id, question_id, presented_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "e5f6a7b8-c9d0-1e2f-3a4b-5c6d7e8f9a0b"
+        question_id:
+          type: string
+          format: uuid
+          example: "11223344-5566-7788-99aa-bbccddeeff00"
+        presented_at:
+          type: string
+          format: date-time
+          example: "2026-05-15T09:30:05Z"
+        self_mark_score:
+          type: integer
+          nullable: true
+          example: 2
+        time_spent_seconds:
+          type: integer
+          nullable: true
+          example: 47
+        mark_scheme_viewed:
+          type: boolean
+          example: false
+
+    ProgressSummary:
+      type: object
+      required: [user_id, subject_id, period, topics]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+        subject_id:
+          type: string
+          format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        period:
+          type: string
+          example: "2026-W20"
+        topics:
+          type: array
+          items:
+            $ref: "#/components/schemas/TopicProgress"
+
+    TopicProgress:
+      type: object
+      required: [topic_tag, score_avg, questions_attempted, questions_correct]
+      properties:
+        topic_tag:
+          type: string
+          example: "algebra"
+        score_avg:
+          type: number
+          format: float
+          example: 0.72
+        questions_attempted:
+          type: integer
+          example: 14
+        questions_correct:
+          type: integer
+          example: 10
+
+    ChildSummary:
+      type: object
+      required: [student_id, display_name, subjects]
+      properties:
+        student_id:
+          type: string
+          format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+        display_name:
+          type: string
+          example: "Amara"
+        subjects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Subject"
+
+    Subscription:
+      type: object
+      required: [id, plan, status, current_period_end]
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "f6a7b8c9-d0e1-2f3a-4b5c-6d7e8f9a0b1c"
+        plan:
+          type: string
+          enum: [free, monthly, annual]
+          example: "monthly"
+        status:
+          type: string
+          enum: [active, trialing, past_due, cancelled, incomplete]
+          example: "active"
+        current_period_end:
+          type: string
+          format: date-time
+          example: "2026-06-15T00:00:00Z"
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+
+    NotificationPreferences:
+      type: object
+      required: [email_session_reminders, email_progress_reports, push_enabled]
+      properties:
+        email_session_reminders:
+          type: boolean
+          example: true
+        email_progress_reports:
+          type: boolean
+          example: true
+        push_enabled:
+          type: boolean
+          example: false
+
+    LocaleSettings:
+      type: object
+      required: [locale]
+      properties:
+        locale:
+          type: string
+          enum: [en-GB, cy]
+          example: "en-GB"
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid access token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "UNAUTHORIZED"
+            message: "Invalid or expired access token"
+    Forbidden:
+      description: Authenticated but not permitted
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "FORBIDDEN"
+            message: "You do not have permission to access this resource"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "NOT_FOUND"
+            message: "Resource not found"
+    UnprocessableEntity:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "VALIDATION_ERROR"
+            message: "Request body failed validation"
+    TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            code: "RATE_LIMITED"
+            message: "Too many requests. Retry after 60 seconds."
+
+tags:
+  - name: auth
+    description: Authentication and token management
+  - name: accounts
+    description: Account pairing and parental consent
+  - name: users
+    description: User profile and GDPR rights
+  - name: subjects
+    description: Subject management
+  - name: diagnostic
+    description: Report upload and weakness diagnostic
+  - name: practice
+    description: Practice sessions and question attempts
+  - name: progress
+    description: Progress tracking and snapshots
+  - name: parent
+    description: Parent dashboard and child oversight
+  - name: subscriptions
+    description: Subscription and billing management
+  - name: notifications
+    description: Notification preferences
+  - name: settings
+    description: Locale and application settings
+
+paths:
+
+  # ─── AUTH ────────────────────────────────────────────────────────────────────
+
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: authRegister
+      summary: Register a new user account
+      description: >
+        Creates a student or parent account. For student accounts with age_band
+        under13 or 13to15, parental consent is required before full access is
+        granted (status will be pending_consent until verified via /accounts/consent).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, display_name, role, age_band]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "amara@example.com"
+                password:
+                  type: string
+                  minLength: 10
+                  description: Minimum 10 characters; must contain upper, lower, and digit
+                  example: "SecurePass1!"
+                display_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  example: "Amara"
+                role:
+                  type: string
+                  enum: [student, parent]
+                  example: "student"
+                age_band:
+                  type: string
+                  enum: [under13, 13to15, 16to18, adult]
+                  example: "13to15"
+                locale:
+                  type: string
+                  enum: [en-GB, cy]
+                  default: "en-GB"
+                  example: "en-GB"
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/TokenPair"
+                  - type: object
+                    properties:
+                      user:
+                        $ref: "#/components/schemas/UserProfile"
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "EMAIL_CONFLICT"
+                message: "An account with this email already exists"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: authLogin
+      summary: Authenticate and receive token pair
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "amara@example.com"
+                password:
+                  type: string
+                  example: "SecurePass1!"
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/TokenPair"
+                  - type: object
+                    properties:
+                      user:
+                        $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "INVALID_CREDENTIALS"
+                message: "Email or password is incorrect"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /auth/refresh:
+    post:
+      tags: [auth]
+      operationId: authRefresh
+      summary: Exchange a refresh token for a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+                  example: "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4..."
+      responses:
+        "200":
+          description: New token pair issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: authLogout
+      summary: Revoke the current refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+                  example: "dGhpcyBpcyBhIHJlZnJlc2ggdG9rZW4..."
+      responses:
+        "204":
+          description: Logged out; refresh token revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /auth/forgot-password:
+    post:
+      tags: [auth]
+      operationId: authForgotPassword
+      summary: Initiate password reset; sends reset email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "amara@example.com"
+      responses:
+        "202":
+          description: Reset email dispatched (response is identical whether or not the email exists to prevent enumeration)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "If an account exists with this email, a reset link has been sent."
+
+  /auth/reset-password:
+    post:
+      tags: [auth]
+      operationId: authResetPassword
+      summary: Complete password reset using token from email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, new_password]
+              properties:
+                token:
+                  type: string
+                  description: Reset token from email link
+                  example: "a1b2c3d4e5f6789012345678901234567890abcd"
+                new_password:
+                  type: string
+                  minLength: 10
+                  example: "NewSecurePass2!"
+      responses:
+        "200":
+          description: Password reset; new token pair issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          description: Token invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "INVALID_RESET_TOKEN"
+                message: "Reset token is invalid or has expired"
+
+  # ─── ACCOUNTS ────────────────────────────────────────────────────────────────
+
+  /accounts/pair:
+    post:
+      tags: [accounts]
+      operationId: accountsPair
+      summary: Initiate parent–student account pairing
+      description: >
+        Parent initiates pairing by providing student's email. Sends a
+        consent/pairing invitation to the student's registered email.
+        Requires the calling user to have role=parent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [student_email, relationship]
+              properties:
+                student_email:
+                  type: string
+                  format: email
+                  example: "amara@example.com"
+                relationship:
+                  type: string
+                  enum: [parent, guardian, carer]
+                  example: "parent"
+      responses:
+        "202":
+          description: Pairing invitation sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account_id:
+                    type: string
+                    format: uuid
+                    example: "aa11bb22-cc33-dd44-ee55-ff6677889900"
+                  status:
+                    type: string
+                    example: "pending"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: Student account not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "STUDENT_NOT_FOUND"
+                message: "No account found with this email"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /accounts/consent:
+    post:
+      tags: [accounts]
+      operationId: accountsConsent
+      summary: Record parental consent for a paired account
+      description: >
+        Called when a parent confirms consent via email link or in-app flow.
+        Records consent timestamp, mechanism, and IP hash. Activates the pairing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id, consent_token]
+              properties:
+                account_id:
+                  type: string
+                  format: uuid
+                  example: "aa11bb22-cc33-dd44-ee55-ff6677889900"
+                consent_token:
+                  type: string
+                  description: Token from the consent email link
+                  example: "b2c3d4e5f6a7890123456789012345678901bcde"
+      responses:
+        "200":
+          description: Consent recorded; account pair activated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  account_id:
+                    type: string
+                    format: uuid
+                    example: "aa11bb22-cc33-dd44-ee55-ff6677889900"
+                  status:
+                    type: string
+                    example: "active"
+        "400":
+          description: Invalid or expired consent token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "INVALID_CONSENT_TOKEN"
+                message: "Consent token is invalid or has expired"
+
+  # ─── USERS ───────────────────────────────────────────────────────────────────
+
+  /users/me:
+    get:
+      tags: [users]
+      operationId: getUsersMe
+      summary: Get current user's profile
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [users]
+      operationId: patchUsersMe
+      summary: Update current user's profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                  maxLength: 100
+                  example: "Amara K."
+                locale:
+                  type: string
+                  enum: [en-GB, cy]
+                  example: "cy"
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    delete:
+      tags: [users]
+      operationId: deleteUsersMe
+      summary: Request GDPR account deletion
+      description: >
+        Initiates GDPR right-to-erasure. Soft-deletes the account and queues
+        hard deletion of personal data fields within 30 days. Subscription is
+        cancelled in Stripe immediately. Requires confirmation body to prevent
+        accidental deletion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm:
+                  type: boolean
+                  enum: [true]
+                  example: true
+      responses:
+        "202":
+          description: Deletion queued; account deactivated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Account deletion queued. Data will be erased within 30 days."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /users/me/export:
+    get:
+      tags: [users]
+      operationId: getUsersMeExport
+      summary: GDPR data export — download all personal data
+      description: >
+        Returns a JSON document containing all personal data held for the current
+        user across all entities. Scoped to C3+ fields the user is entitled to
+        see. Rate-limited to 1 request per 24 hours per user.
+      responses:
+        "200":
+          description: GDPR data export
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  export_generated_at:
+                    type: string
+                    format: date-time
+                    example: "2026-05-15T12:00:00Z"
+                  user:
+                    $ref: "#/components/schemas/UserProfile"
+                  subjects:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Subject"
+                  diagnostic_sessions:
+                    type: array
+                    items:
+                      type: object
+                      example: { "id": "b7c6d5e4-...", "session_type": "report_upload", "status": "complete" }
+                  practice_sessions:
+                    type: array
+                    items:
+                      type: object
+                      example: { "id": "d4e5f6a7-...", "status": "completed", "question_count": 10 }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ─── SUBJECTS ────────────────────────────────────────────────────────────────
+
+  /subjects:
+    post:
+      tags: [subjects]
+      operationId: createSubject
+      summary: Add a subject for the current user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject_name, exam_board, level]
+              properties:
+                subject_name:
+                  type: string
+                  example: "Mathematics"
+                exam_board:
+                  type: string
+                  example: "AQA"
+                level:
+                  type: string
+                  enum: [11plus, ks3, gcse, alevel]
+                  example: "gcse"
+      responses:
+        "201":
+          description: Subject created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subject"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    get:
+      tags: [subjects]
+      operationId: listSubjects
+      summary: List current user's active subjects
+      responses:
+        "200":
+          description: Subject list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subjects:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Subject"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /subjects/{id}:
+    delete:
+      tags: [subjects]
+      operationId: deleteSubject
+      summary: Remove (soft-delete) a subject
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      responses:
+        "204":
+          description: Subject deactivated
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── DIAGNOSTIC ──────────────────────────────────────────────────────────────
+
+  /diagnostic/upload:
+    post:
+      tags: [diagnostic]
+      operationId: initiateReportUpload
+      summary: Initiate a report upload — returns presigned S3 URL and job ID
+      description: >
+        Creates a diagnostic_session and uploaded_documents record, generates a
+        15-minute presigned S3 PUT URL, and enqueues a BullMQ processing job.
+        The client uploads the file directly to S3 using the returned URL, then
+        polls /diagnostic/status/:jobId or subscribes to /diagnostic/events/:jobId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject_id, file_name, content_type]
+              properties:
+                subject_id:
+                  type: string
+                  format: uuid
+                  example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                file_name:
+                  type: string
+                  example: "maths_report_2026.pdf"
+                content_type:
+                  type: string
+                  enum: [application/pdf, image/jpeg, image/png]
+                  example: "application/pdf"
+      responses:
+        "201":
+          description: Upload initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiagnosticUploadInitiated"
+        "402":
+          description: Free tier limit reached — upgrade required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "SUBSCRIPTION_REQUIRED"
+                message: "Upgrade to continue using the diagnostic feature"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /diagnostic/status/{jobId}:
+    get:
+      tags: [diagnostic]
+      operationId: getJobStatus
+      summary: Poll diagnostic job status
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "c9d8e7f6-a5b4-3c2d-1e0f-9a8b7c6d5e4f"
+      responses:
+        "200":
+          description: Current job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /diagnostic/events/{jobId}:
+    get:
+      tags: [diagnostic]
+      operationId: streamJobEvents
+      summary: SSE stream for diagnostic job progress
+      description: >
+        Server-Sent Events stream. Client receives progress events as the BullMQ
+        worker processes the document. Events: `progress` (with progress_pct),
+        `complete` (with session_id), `failed` (with error). Connection kept open
+        until terminal event or client disconnects.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "c9d8e7f6-a5b4-3c2d-1e0f-9a8b7c6d5e4f"
+      responses:
+        "200":
+          description: SSE stream open
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  data: {"event":"progress","job_id":"c9d8e7f6...","progress_pct":45}
+
+                  data: {"event":"complete","job_id":"c9d8e7f6...","session_id":"b7c6d5e4..."}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /diagnostic/results/{sessionId}:
+    get:
+      tags: [diagnostic]
+      operationId: getDiagnosticResults
+      summary: Get weakness map for a completed diagnostic session
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "b7c6d5e4-f3a2-1b0c-9d8e-7f6a5b4c3d2e"
+      responses:
+        "200":
+          description: Diagnostic results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiagnosticResults"
+        "400":
+          description: Session not yet complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "SESSION_NOT_COMPLETE"
+                message: "Diagnostic session is still processing"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── PRACTICE ────────────────────────────────────────────────────────────────
+
+  /practice/questions:
+    get:
+      tags: [practice]
+      operationId: getPersonalisedQuestions
+      summary: Fetch a personalised question pack
+      description: >
+        Returns a set of questions weighted towards the user's diagnosed weak topics.
+        If no diagnostic data exists, returns a default curriculum-ordered set.
+      parameters:
+        - name: subject_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        - name: topic_tag
+          in: query
+          required: false
+          schema:
+            type: string
+          example: "algebra"
+        - name: count
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 30
+            default: 10
+          example: 10
+      responses:
+        "200":
+          description: Question pack
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  questions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Question"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /practice/sessions:
+    post:
+      tags: [practice]
+      operationId: createPracticeSession
+      summary: Start a new practice session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject_id, question_ids]
+              properties:
+                subject_id:
+                  type: string
+                  format: uuid
+                  example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+                question_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  minItems: 1
+                  maxItems: 30
+                  example: ["11223344-5566-7788-99aa-bbccddeeff00"]
+      responses:
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PracticeSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /practice/sessions/{id}:
+    get:
+      tags: [practice]
+      operationId: getPracticeSession
+      summary: Get session state including attempts
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a"
+      responses:
+        "200":
+          description: Session with attempts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PracticeSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [practice]
+      operationId: updatePracticeSession
+      summary: End or pause a practice session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [completed, abandoned]
+                  example: "completed"
+      responses:
+        "200":
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PracticeSession"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /practice/sessions/{id}/attempt:
+    post:
+      tags: [practice]
+      operationId: submitQuestionAttempt
+      summary: Submit a self-mark attempt for a question in a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "d4e5f6a7-b8c9-0d1e-2f3a-4b5c6d7e8f9a"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question_id, self_mark_score, time_spent_seconds]
+              properties:
+                question_id:
+                  type: string
+                  format: uuid
+                  example: "11223344-5566-7788-99aa-bbccddeeff00"
+                self_mark_score:
+                  type: integer
+                  minimum: 0
+                  example: 2
+                time_spent_seconds:
+                  type: integer
+                  minimum: 0
+                  example: 47
+                mark_scheme_viewed:
+                  type: boolean
+                  default: false
+                  example: false
+      responses:
+        "201":
+          description: Attempt recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuestionAttempt"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  # ─── PROGRESS ────────────────────────────────────────────────────────────────
+
+  /progress:
+    get:
+      tags: [progress]
+      operationId: getProgressSummary
+      summary: Get progress summary for the current user
+      parameters:
+        - name: subject_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        - name: period
+          in: query
+          required: false
+          description: ISO week period, e.g. 2026-W20. Defaults to current week.
+          schema:
+            type: string
+          example: "2026-W20"
+      responses:
+        "200":
+          description: Progress summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProgressSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /progress/topics:
+    get:
+      tags: [progress]
+      operationId: getProgressTopics
+      summary: Get topic-level progress breakdown
+      parameters:
+        - name: subject_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        - name: weeks
+          in: query
+          required: false
+          description: Number of recent weeks to include. Default 8.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 52
+            default: 8
+          example: 8
+      responses:
+        "200":
+          description: Topic-level breakdown
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  topics:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TopicProgress"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  # ─── PARENT ──────────────────────────────────────────────────────────────────
+
+  /parent/children:
+    get:
+      tags: [parent]
+      operationId: listChildren
+      summary: List students linked to the current parent account
+      description: Requires role=parent.
+      responses:
+        "200":
+          description: Linked children
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  children:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChildSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /parent/children/{studentId}/progress:
+    get:
+      tags: [parent]
+      operationId: getChildProgress
+      summary: Get a linked student's progress (parent view)
+      parameters:
+        - name: studentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+        - name: subject_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      responses:
+        "200":
+          description: Child's progress summary
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProgressSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /parent/children/{studentId}/sessions:
+    get:
+      tags: [parent]
+      operationId: getChildSessions
+      summary: Get a linked student's practice session history
+      parameters:
+        - name: studentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 20
+          example: 20
+        - name: before
+          in: query
+          required: false
+          description: Cursor — return sessions before this timestamp
+          schema:
+            type: string
+            format: date-time
+          example: "2026-05-15T00:00:00Z"
+      responses:
+        "200":
+          description: Session history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PracticeSession"
+                  next_cursor:
+                    type: string
+                    format: date-time
+                    nullable: true
+                    example: "2026-05-08T14:30:00Z"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /parent/children/{studentId}/controls:
+    post:
+      tags: [parent]
+      operationId: updateParentalControls
+      summary: Update parental controls for a linked student
+      description: Controls available in v1 — session time limits, daily question caps.
+      parameters:
+        - name: studentId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                daily_question_cap:
+                  type: integer
+                  minimum: 0
+                  maximum: 200
+                  nullable: true
+                  description: Max questions per day; null = no cap
+                  example: 50
+                session_duration_minutes:
+                  type: integer
+                  minimum: 5
+                  maximum: 120
+                  nullable: true
+                  description: Max single session duration; null = no limit
+                  example: 45
+      responses:
+        "200":
+          description: Controls updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  student_id:
+                    type: string
+                    format: uuid
+                    example: "8f274e3a-1c2d-4b5e-9f6a-7d8c9b0a1e2f"
+                  daily_question_cap:
+                    type: integer
+                    nullable: true
+                    example: 50
+                  session_duration_minutes:
+                    type: integer
+                    nullable: true
+                    example: 45
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── SUBSCRIPTIONS ───────────────────────────────────────────────────────────
+
+  /subscriptions/me:
+    get:
+      tags: [subscriptions]
+      operationId: getMySubscription
+      summary: Get current user's subscription
+      responses:
+        "200":
+          description: Subscription record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Subscription"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /subscriptions/checkout:
+    post:
+      tags: [subscriptions]
+      operationId: createCheckoutSession
+      summary: Create a Stripe Checkout session for plan upgrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan, success_url, cancel_url]
+              properties:
+                plan:
+                  type: string
+                  enum: [monthly, annual]
+                  example: "monthly"
+                success_url:
+                  type: string
+                  format: uri
+                  description: URL to redirect to after successful payment
+                  example: "https://app.revizr.co.uk/subscription/success"
+                cancel_url:
+                  type: string
+                  format: uri
+                  description: URL to redirect to if user cancels
+                  example: "https://app.revizr.co.uk/subscription"
+      responses:
+        "200":
+          description: Checkout URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkout_url:
+                    type: string
+                    format: uri
+                    example: "https://checkout.stripe.com/c/pay/cs_test_..."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Already on paid plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "ALREADY_SUBSCRIBED"
+                message: "Account is already on a paid plan"
+
+  /subscriptions/portal:
+    post:
+      tags: [subscriptions]
+      operationId: createBillingPortalSession
+      summary: Create a Stripe Billing Portal session for self-service management
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [return_url]
+              properties:
+                return_url:
+                  type: string
+                  format: uri
+                  description: URL to return to after the portal session
+                  example: "https://app.revizr.co.uk/account"
+      responses:
+        "200":
+          description: Billing portal URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  portal_url:
+                    type: string
+                    format: uri
+                    example: "https://billing.stripe.com/p/session/test_..."
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: No Stripe customer record exists (user is on free tier, never upgraded)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "NO_BILLING_ACCOUNT"
+                message: "No billing account found. Upgrade first."
+
+  /subscriptions/webhook:
+    post:
+      tags: [subscriptions]
+      operationId: stripeWebhook
+      summary: Stripe webhook endpoint (internal — Stripe only)
+      description: >
+        Receives Stripe webhook events. Verifies the Stripe-Signature header
+        before processing. Not authenticated via BearerAuth — authenticated via
+        Stripe webhook secret. Should not be called by API consumers directly.
+      security: []
+      parameters:
+        - name: Stripe-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+          example: "t=1716768000,v1=abc123..."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Stripe event payload
+              example:
+                id: "evt_1Abc..."
+                type: "customer.subscription.updated"
+                data:
+                  object:
+                    id: "sub_1Abc..."
+                    status: "active"
+      responses:
+        "200":
+          description: Event acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+                    example: true
+        "400":
+          description: Invalid webhook signature
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                code: "INVALID_SIGNATURE"
+                message: "Webhook signature verification failed"
+
+  # ─── NOTIFICATIONS ───────────────────────────────────────────────────────────
+
+  /notifications/preferences:
+    get:
+      tags: [notifications]
+      operationId: getNotificationPreferences
+      summary: Get current user's notification preferences
+      responses:
+        "200":
+          description: Notification preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPreferences"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [notifications]
+      operationId: updateNotificationPreferences
+      summary: Update notification preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email_session_reminders:
+                  type: boolean
+                  example: false
+                email_progress_reports:
+                  type: boolean
+                  example: true
+                push_enabled:
+                  type: boolean
+                  example: true
+                push_subscription:
+                  type: object
+                  description: Web Push API subscription object; required when push_enabled=true
+                  properties:
+                    endpoint:
+                      type: string
+                      format: uri
+                      example: "https://fcm.googleapis.com/fcm/send/..."
+                    keys:
+                      type: object
+                      properties:
+                        p256dh:
+                          type: string
+                          example: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlTiE..."
+                        auth:
+                          type: string
+                          example: "tBHItJI5svbpez7KI4CCXg=="
+      responses:
+        "200":
+          description: Updated preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationPreferences"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  # ─── SETTINGS ────────────────────────────────────────────────────────────────
+
+  /settings/locale:
+    get:
+      tags: [settings]
+      operationId: getLocaleSettings
+      summary: Get current locale setting
+      responses:
+        "200":
+          description: Locale settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocaleSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    patch:
+      tags: [settings]
+      operationId: updateLocaleSettings
+      summary: Update locale (Welsh toggle)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [locale]
+              properties:
+                locale:
+                  type: string
+                  enum: [en-GB, cy]
+                  example: "cy"
+      responses:
+        "200":
+          description: Locale updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocaleSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
