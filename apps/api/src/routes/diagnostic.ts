@@ -302,6 +302,105 @@ export default async function diagnosticRoutes(fastify: FastifyInstance): Promis
     });
   });
 
+  // ─── POST /diagnostic/quiz ────────────────────────────────────────────────
+  //
+  // F3 diagnostic path: the student self-reports confidence per topic (no document
+  // upload required). Confidence scores are converted to weakness scores and written
+  // directly as diagnostic_results — no Claude API call, no S3 upload.
+  //
+  // Body: { subject_id: UUID, responses: [{ topic_tag: string, confidence: 1-5 }] }
+  // Returns: { sessionId: string } → client redirects to /diagnostic/results/:sessionId
+
+  const quizSchema = z.object({
+    subject_id: z.string().uuid(),
+    responses: z.array(
+      z.object({
+        topic_tag: z.string().min(1).max(100),
+        confidence: z.union([
+          z.literal(1),
+          z.literal(2),
+          z.literal(3),
+          z.literal(4),
+          z.literal(5),
+        ]),
+      })
+    ).min(1).max(50),
+  });
+
+  fastify.post('/diagnostic/quiz', {
+    preHandler: [requireAuth],
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    const parse = quizSchema.safeParse(request.body);
+    if (!parse.success) {
+      return reply.code(422).send({
+        code: 'VALIDATION_ERROR',
+        message: 'Request body failed validation',
+        details: parse.error.flatten().fieldErrors,
+      });
+    }
+
+    const user = getAuthUser(request);
+    const { subject_id, responses } = parse.data;
+
+    // Verify subject belongs to user and is active
+    const subjectCheck = await db.query(
+      `SELECT id FROM subjects WHERE id = $1 AND user_id = $2 AND is_active = true`,
+      [subject_id, user.sub]
+    );
+    if ((subjectCheck.rowCount ?? 0) === 0) {
+      return reply.code(422).send({ code: 'VALIDATION_ERROR', message: 'Subject not found or not owned by user' });
+    }
+
+    const sessionId = uuidv4();
+    const encUserId = encrypt(user.sub);
+
+    // Create diagnostic_session with session_type = 'quiz'
+    await db.query(
+      `INSERT INTO diagnostic_sessions (id, user_id, session_type, status)
+       VALUES ($1, $2, 'quiz', 'processing')`,
+      [sessionId, encUserId]
+    );
+
+    // Convert confidence scores to weakness scores and write one diagnostic_results row per response.
+    // weakness_score = (6 - confidence) / 5
+    //   confidence 1 (very weak)      → weakness_score 1.000
+    //   confidence 2 (weak)           → weakness_score 0.800
+    //   confidence 3 (moderate)       → weakness_score 0.600
+    //   confidence 4 (confident)      → weakness_score 0.400
+    //   confidence 5 (very confident) → weakness_score 0.200
+    for (const response of responses) {
+      const weaknessScore = (6 - response.confidence) / 5;
+      await db.query(
+        `INSERT INTO diagnostic_results
+           (id, diagnostic_session_id, user_id, subject_id, topic_tag, weakness_score)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (diagnostic_session_id, topic_tag)
+         DO UPDATE SET weakness_score = $6, created_at = now()`,
+        [uuidv4(), sessionId, encUserId, subject_id, response.topic_tag, weaknessScore]
+      );
+    }
+
+    // Mark session complete immediately — no async processing needed for quiz path
+    await db.query(
+      `UPDATE diagnostic_sessions
+       SET status = 'complete', completed_at = now()
+       WHERE id = $1`,
+      [sessionId]
+    );
+
+    await writeAuditLog({
+      agentOrUserId: hashUserIdForAudit(user.sub),
+      action: 'diagnostic.quiz.complete',
+      entityType: 'diagnostic_session',
+      entityId: sessionId,
+      decision: 'allowed',
+      policy: 'diagnostic_quiz',
+      metadata: { topic_count: responses.length },
+    });
+
+    return reply.code(201).send({ sessionId });
+  });
+
   // ─── GET /diagnostic/results/:sessionId ───────────────────────────────────
 
   fastify.get('/diagnostic/results/:sessionId', {

@@ -3,14 +3,13 @@
  *
  * Steps:
  * 1. Subject select (from user's subjects)
- * 2. 10 diagnostic questions per selected subject
- * 3. Submit → shows "Analysing…" → polls GET /diagnostic/status/:jobId
+ * 2. Confidence self-assessment per topic (one question per topic_tag)
+ * 3. Submit → POST /diagnostic/quiz (synchronous — no polling needed)
  * 4. Complete → redirect to /diagnostic/results/:sessionId
  *
- * Note: The diagnostic quiz uses a simplified question format —
- * the student selects a self-assessment level per topic rather than
- * answering full exam questions. This is by design for the onboarding
- * diagnostic flow.
+ * The quiz does not use the practice question bank. The student rates their
+ * confidence per topic; the backend converts these to weakness scores directly
+ * without a Claude API call (F3 path, no document upload required).
  */
 
 "use client";
@@ -22,28 +21,55 @@ import { Alert } from "@/components/ui/Alert";
 import { Progress } from "@/components/ui/Progress";
 import {
   listSubjects,
-  getPersonalisedQuestions,
-  createPracticeSession,
-  submitQuestionAttempt,
-  updatePracticeSession,
-  getJobStatus,
+  submitDiagnosticQuiz,
   type Subject,
-  type Question,
   RevizrApiError,
 } from "@/lib/api";
 
 type Phase =
   | "select-subject"
   | "quiz"
-  | "analysing"
+  | "submitting"
   | "complete"
   | "error";
 
-const CONFIDENCE_OPTIONS = [
-  { value: 0, label: "Not confident at all" },
-  { value: 1, label: "Slightly confident" },
-  { value: 2, label: "Fairly confident" },
-  { value: 3, label: "Very confident" },
+// Topic tags used in the quiz. These must match the taxonomy used in
+// questions.topic_tags and diagnostic_results.topic_tag.
+const DIAGNOSTIC_TOPICS: Array<{ tag: string; label: string; subject: string }> = [
+  // Mathematics
+  { tag: "algebra", label: "Algebra", subject: "Mathematics" },
+  { tag: "geometry", label: "Geometry & Shapes", subject: "Mathematics" },
+  { tag: "trigonometry", label: "Trigonometry", subject: "Mathematics" },
+  { tag: "fractions", label: "Fractions & Decimals", subject: "Mathematics" },
+  { tag: "statistics", label: "Statistics & Probability", subject: "Mathematics" },
+  // English
+  { tag: "grammar", label: "Grammar & Punctuation", subject: "English" },
+  { tag: "comprehension", label: "Reading Comprehension", subject: "English" },
+  { tag: "creative_writing", label: "Creative Writing", subject: "English" },
+  { tag: "poetry", label: "Poetry Analysis", subject: "English" },
+  { tag: "media_language", label: "Media & Language", subject: "English" },
+  // Biology
+  { tag: "cells", label: "Cells & Organisation", subject: "Biology" },
+  { tag: "genetics", label: "Genetics & Inheritance", subject: "Biology" },
+  { tag: "evolution", label: "Evolution & Natural Selection", subject: "Biology" },
+  { tag: "ecosystems", label: "Ecosystems & Interdependence", subject: "Biology" },
+  { tag: "digestion", label: "Digestion & Nutrition", subject: "Biology" },
+  // Physics
+  { tag: "forces", label: "Forces & Motion", subject: "Physics" },
+  { tag: "electricity", label: "Electricity & Circuits", subject: "Physics" },
+  { tag: "waves", label: "Waves & Light", subject: "Physics" },
+  // Chemistry
+  { tag: "atomic_structure", label: "Atomic Structure", subject: "Chemistry" },
+  { tag: "bonding", label: "Bonding & Structure", subject: "Chemistry" },
+];
+
+// Confidence values map to backend confidence: 1=very weak → 5=very confident
+const CONFIDENCE_OPTIONS: Array<{ value: 1 | 2 | 3 | 4 | 5; label: string }> = [
+  { value: 1, label: "Very weak" },
+  { value: 2, label: "Weak" },
+  { value: 3, label: "OK" },
+  { value: 4, label: "Confident" },
+  { value: 5, label: "Very confident" },
 ];
 
 export function DiagnosticQuiz() {
@@ -51,16 +77,15 @@ export function DiagnosticQuiz() {
 
   const [phase, setPhase] = useState<Phase>("select-subject");
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(
-    null
-  );
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
+  const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [analysingProgress, setAnalysingProgress] = useState(0);
+  // answers: topic_tag → confidence value (1-5)
+  const [answers, setAnswers] = useState<Record<string, 1 | 2 | 3 | 4 | 5>>({});
   const [error, setError] = useState<string | undefined>();
+
+  // Topics filtered to match the selected subject
+  const [topics, setTopics] = useState<typeof DIAGNOSTIC_TOPICS>([]);
 
   useEffect(() => {
     async function load() {
@@ -75,91 +100,42 @@ export function DiagnosticQuiz() {
     void load();
   }, []);
 
-  // Poll job status when analysing
-  useEffect(() => {
-    if (phase !== "analysing" || !jobId) return;
-
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const status = await getJobStatus(jobId);
-        if (cancelled) return;
-
-        setAnalysingProgress(status.progress_pct ?? 50);
-
-        if (status.status === "complete") {
-          setPhase("complete");
-          const sid = sessionId;
-          if (sid) {
-            localStorage.setItem("revizr_last_diagnostic_session_id", sid);
-            router.push(`/diagnostic/results/${sid}`);
-          }
-        } else if (status.status === "failed") {
-          setPhase("error");
-          setError(status.error_message ?? "Analysis failed. Please try again.");
-        } else {
-          setTimeout(poll, 2000);
-        }
-      } catch {
-        if (!cancelled) {
-          setTimeout(poll, 3000);
-        }
-      }
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-    };
-  }, [phase, jobId, sessionId, router]);
-
-  async function handleSubjectSelect() {
+  function handleSubjectSelect() {
     if (!selectedSubjectId) return;
+    const subject = subjects.find((s) => s.id === selectedSubjectId) ?? null;
+    setSelectedSubject(subject);
 
-    try {
-      const { questions: qs } = await getPersonalisedQuestions({
-        subject_id: selectedSubjectId,
-        count: 10,
-      });
-      setQuestions(qs);
-      setCurrentIndex(0);
-      setAnswers({});
-      setPhase("quiz");
-    } catch {
-      setError("Unable to load questions. Please try again.");
-      setPhase("error");
-    }
+    // Filter DIAGNOSTIC_TOPICS to those matching this subject name (case-insensitive).
+    // Fall back to all topics if subject name doesn't match any group.
+    const subjectName = subject?.subject_name ?? "";
+    const matched = DIAGNOSTIC_TOPICS.filter(
+      (t) => t.subject.toLowerCase() === subjectName.toLowerCase()
+    );
+    const topicList = matched.length >= 3 ? matched : DIAGNOSTIC_TOPICS.slice(0, 10);
+
+    setTopics(topicList);
+    setCurrentIndex(0);
+    setAnswers({});
+    setPhase("quiz");
   }
 
   async function handleQuizComplete() {
-    if (!selectedSubjectId) return;
-    setPhase("analysing");
-    setAnalysingProgress(10);
+    if (!selectedSubjectId || topics.length === 0) return;
+    setPhase("submitting");
+
+    // Build responses array from answers
+    const responses = topics.map((t) => ({
+      topic_tag: t.tag,
+      confidence: (answers[t.tag] ?? 3) as 1 | 2 | 3 | 4 | 5,
+    }));
 
     try {
-      const sess = await createPracticeSession({
+      const { sessionId } = await submitDiagnosticQuiz({
         subject_id: selectedSubjectId,
-        question_ids: questions.map((q) => q.id),
+        responses,
       });
-      setSessionId(sess.id);
-      setJobId(sess.id); // Using session ID as job ID for polling
-
-      // Submit all answers
-      for (const [questionId, score] of Object.entries(answers)) {
-        try {
-          await submitQuestionAttempt(sess.id, {
-            question_id: questionId,
-            self_mark_score: score,
-            time_spent_seconds: 30,
-            mark_scheme_viewed: false,
-          });
-        } catch {
-          // Non-fatal
-        }
-      }
-
-      await updatePracticeSession(sess.id, "completed");
-      setAnalysingProgress(30);
+      // Session is immediately complete — redirect straight to results
+      router.push(`/diagnostic/results/${sessionId}`);
     } catch (ex) {
       if (ex instanceof RevizrApiError) {
         setError(ex.apiError.message);
@@ -170,25 +146,23 @@ export function DiagnosticQuiz() {
     }
   }
 
-  function handleAnswer(questionId: string, score: number) {
-    setAnswers((prev) => ({ ...prev, [questionId]: score }));
+  function handleAnswer(topicTag: string, confidence: 1 | 2 | 3 | 4 | 5) {
+    setAnswers((prev) => ({ ...prev, [topicTag]: confidence }));
   }
 
   function handleNext() {
-    if (currentIndex + 1 >= questions.length) {
+    if (currentIndex + 1 >= topics.length) {
       void handleQuizComplete();
     } else {
       setCurrentIndex((i) => i + 1);
     }
   }
 
-  const currentQuestion = questions[currentIndex];
-  const currentAnswer = currentQuestion
-    ? answers[currentQuestion.id]
-    : undefined;
+  const currentTopic = topics[currentIndex];
+  const currentAnswer = currentTopic ? answers[currentTopic.tag] : undefined;
   const progressPct =
-    questions.length > 0
-      ? Math.round((currentIndex / questions.length) * 100)
+    topics.length > 0
+      ? Math.round((currentIndex / topics.length) * 100)
       : 0;
 
   if (phase === "error") {
@@ -251,41 +225,46 @@ export function DiagnosticQuiz() {
     );
   }
 
-  if (phase === "quiz" && currentQuestion) {
+  if (phase === "quiz" && currentTopic) {
     return (
       <div className="space-y-6">
         {/* Progress */}
         <div>
           <Progress
             value={progressPct}
-            aria-label={`Question ${currentIndex + 1} of ${questions.length}`}
+            aria-label={`Topic ${currentIndex + 1} of ${topics.length}`}
           />
           <p className="text-xs text-text-tertiary mt-1">
-            Question <strong>{currentIndex + 1}</strong> of{" "}
-            <strong>{questions.length}</strong>
+            Topic <strong>{currentIndex + 1}</strong> of{" "}
+            <strong>{topics.length}</strong>
+            {selectedSubject && (
+              <span className="ml-2 text-text-tertiary">
+                — {selectedSubject.subject_name}
+              </span>
+            )}
           </p>
         </div>
 
-        {/* Question — simplified confidence assessment for diagnostic */}
+        {/* Topic confidence question */}
         <div className="bg-bg-surface border border-border-default rounded-lg p-6">
           <p className="text-xs text-text-tertiary mb-2 font-medium uppercase tracking-wider">
-            {currentQuestion.topic_tags.join(", ").replace(/_/g, " ")}
+            {currentTopic.tag.replace(/_/g, " ")}
           </p>
           <p className="text-sm text-text-primary font-medium leading-relaxed">
-            {currentQuestion.question_text}
+            How confident are you with <strong>{currentTopic.label}</strong>?
           </p>
         </div>
 
         {/* Confidence rating */}
         <fieldset className="border-0 m-0 p-0">
-          <legend className="text-sm font-semibold text-text-primary mb-3">
-            How confident are you with this topic?
+          <legend className="sr-only">
+            Confidence rating for {currentTopic.label}
           </legend>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-5">
             {CONFIDENCE_OPTIONS.map((opt) => (
               <label
                 key={opt.value}
-                htmlFor={`conf-${currentQuestion.id}-${opt.value}`}
+                htmlFor={`conf-${currentTopic.tag}-${opt.value}`}
                 className={`
                   flex items-center justify-center text-center
                   p-3 rounded-lg border cursor-pointer text-xs font-medium
@@ -300,12 +279,12 @@ export function DiagnosticQuiz() {
                 `}
               >
                 <input
-                  id={`conf-${currentQuestion.id}-${opt.value}`}
+                  id={`conf-${currentTopic.tag}-${opt.value}`}
                   type="radio"
-                  name={`confidence-${currentQuestion.id}`}
+                  name={`confidence-${currentTopic.tag}`}
                   value={opt.value}
                   checked={currentAnswer === opt.value}
-                  onChange={() => handleAnswer(currentQuestion.id, opt.value)}
+                  onChange={() => handleAnswer(currentTopic.tag, opt.value)}
                   className="sr-only"
                 />
                 {opt.label}
@@ -318,25 +297,25 @@ export function DiagnosticQuiz() {
           onClick={handleNext}
           disabled={currentAnswer === undefined}
         >
-          {currentIndex + 1 >= questions.length ? "Finish quiz" : "Next question"}
+          {currentIndex + 1 >= topics.length ? "Finish quiz" : "Next topic"}
         </Button>
       </div>
     );
   }
 
-  if (phase === "analysing") {
+  if (phase === "submitting") {
     return (
       <div className="space-y-4" aria-live="polite" aria-atomic="true">
         <p className="text-sm font-semibold text-text-primary">
-          Analysing your results…
+          Saving your results…
         </p>
         <Progress
-          value={analysingProgress}
-          aria-label="Analysing your results"
+          value={80}
+          aria-label="Saving results"
           variant="default"
         />
         <p className="text-xs text-text-secondary">
-          We&rsquo;re building your topic map. This usually takes under a minute.
+          Building your topic map…
         </p>
       </div>
     );

@@ -417,6 +417,20 @@ export async function getDiagnosticResults(
   return apiFetch(`/diagnostic/results/${sessionId}`);
 }
 
+export interface DiagnosticQuizPayload {
+  subject_id: string;
+  responses: Array<{
+    topic_tag: string;
+    confidence: 1 | 2 | 3 | 4 | 5;
+  }>;
+}
+
+export async function submitDiagnosticQuiz(
+  payload: DiagnosticQuizPayload
+): Promise<{ sessionId: string }> {
+  return apiFetch("/diagnostic/quiz", { method: "POST", body: payload });
+}
+
 /**
  * SSE helper for diagnostic job progress.
  * Returns an EventSource-like interface.

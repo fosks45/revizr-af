@@ -33,6 +33,8 @@ import { Worker, Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
+import pdfParse from 'pdf-parse';
+import Tesseract from 'tesseract.js';
 import { fetchObjectBytes, deleteObject } from '../lib/s3.js';
 import { callClaude, parseClaudeJson } from '../lib/claude.js';
 import { encrypt, decrypt } from '../lib/encryption.js';
@@ -148,20 +150,47 @@ export function createDiagnosticWorker(redis: Redis, db: Pool): Worker {
       // ── Step 3: Extract text from document ───────────────────────────────
       let documentText: string;
 
-      if (contentType === 'application/pdf') {
-        // TODO [T-024]: Integrate a PDF text extraction library.
-        // Options evaluated: pdf-parse, pdfjs-dist, unstructured.
-        // ADR-0011 (Sprint 2 technical spike) will confirm the chosen library.
-        // For now: convert bytes to base64 and pass to Claude as a text placeholder.
-        // Claude's vision capability can process PDF content directly via the API
-        // (Anthropic supports PDF processing in claude-sonnet-4-5+).
-        // TODO: replace with proper PDF extraction once library is selected.
-        documentText = `[PDF CONTENT — ${fileBytes.length} bytes — PDF extraction library TBD per ADR-0011]\n\nBase64 excerpt: ${fileBytes.slice(0, 500).toString('base64')}`;
+      const keyLower = s3Key.toLowerCase();
+      if (keyLower.endsWith('.pdf') || contentType === 'application/pdf') {
+        // PDF extraction via pdf-parse
+        try {
+          const pdfData = await pdfParse(fileBytes);
+          documentText = pdfData.text;
+          if (!documentText || documentText.trim().length === 0) {
+            throw new Error('pdf-parse returned empty text — document may be scanned/image-only');
+          }
+        } catch (err) {
+          throw Object.assign(
+            new Error(`PDF text extraction failed for job ${jobId}: ${String(err)}`),
+            { code: 'UNSUPPORTED_FILE_TYPE' }
+          );
+        }
+      } else if (
+        keyLower.endsWith('.jpg') ||
+        keyLower.endsWith('.jpeg') ||
+        keyLower.endsWith('.png') ||
+        contentType === 'image/jpeg' ||
+        contentType === 'image/png'
+      ) {
+        // Image OCR via tesseract.js
+        try {
+          const ocrResult = await Tesseract.recognize(fileBytes, 'eng', { logger: () => {} });
+          documentText = ocrResult.data.text;
+          if (!documentText || documentText.trim().length === 0) {
+            throw new Error('Tesseract returned empty text — image may be blank or illegible');
+          }
+        } catch (err) {
+          throw Object.assign(
+            new Error(`Image OCR extraction failed for job ${jobId}: ${String(err)}`),
+            { code: 'UNSUPPORTED_FILE_TYPE' }
+          );
+        }
       } else {
-        // Images: pass as base64 encoded text for Claude's vision capability
-        // TODO [T-024]: Use Claude's native image processing (messages.content with image type)
-        // For now: encode as base64 text
-        documentText = `[IMAGE CONTENT — ${contentType} — ${fileBytes.length} bytes]\nBase64: ${fileBytes.toString('base64').slice(0, 1000)}`;
+        // Unsupported file type
+        throw Object.assign(
+          new Error(`Unsupported file type for job ${jobId}: s3Key=${s3Key}, contentType=${contentType}`),
+          { code: 'UNSUPPORTED_FILE_TYPE' }
+        );
       }
 
       await job.updateProgress(35);

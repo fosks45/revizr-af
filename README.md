@@ -71,7 +71,7 @@ cd apps/api
 DATABASE_URL=postgres://revizr:changeme@localhost:5432/revizr npm run migrate
 ```
 
-You should see 12 migrations applied.
+You should see 13 migrations applied (including the development seed data).
 
 ---
 
@@ -140,15 +140,38 @@ docs/           Evidence packs from the product pipeline
 ## Key constraints
 
 - **No student self-registration** — all accounts created by a parent. `/auth/register` is parent-only.
-- **Copyright gate** — no exam paper content is served until `board_licence_cleared = TRUE` for that board in the `exam_boards_config` table. Currently all boards are FALSE (negotiations in progress).
+- **Copyright gate** — no exam paper content is served until `board_licence_cleared = TRUE` for that board in the `exam_boards_config` table. Real boards are FALSE by default; the SAMPLE board (migration 013) is TRUE for development. This is a business/legal constraint, not a code gap — the gate is fully implemented.
 - **Data residency** — all user data must stay in `eu-west-2` (London). The server enforces this at startup in production.
 - **Welsh language** — toggle available at `/settings/locale`. Strings in `apps/web/lib/i18n.ts`.
 
-## Pre-launch checklist (before removing `--prerelease`)
+## What works end-to-end
 
-- [ ] Copyright licence confirmed from at least one exam board → set `board_licence_cleared = TRUE` for that board
+- **Authentication & accounts** — parent registration, student account creation, JWT auth, token refresh.
+- **Subjects** — create, list, soft-delete.
+- **Diagnostic quiz (F3)** — `POST /diagnostic/quiz` accepts confidence self-assessments per topic, converts them to weakness scores, and returns a `sessionId` immediately. The frontend (`DiagnosticQuiz` component) posts the quiz and redirects to results. No document upload or Claude API call required for this path.
+- **Diagnostic report upload (F2)** — `POST /diagnostic/upload` creates a session and returns a presigned S3 URL. The BullMQ worker extracts text (PDF via `pdf-parse`, images via `tesseract.js`), scrubs PII, calls the Claude API, and writes weakness scores. The S3 object is deleted after extraction (ADR-0008).
+- **Practice sessions** — create session, fetch personalised questions, submit attempts, mark as complete. Questions are served only for boards with `board_licence_cleared = TRUE` (use migration 013 SAMPLE data for local development).
+- **Progress** — weakness map, topic-level scores, session history.
+- **Parent dashboard** — child progress, session list, parental controls (daily cap, session duration).
+- **Subscriptions** — Stripe checkout, billing portal, webhook handler.
+- **Notifications** — preference management.
+- **Settings** — locale toggle (en-GB / cy).
+- **Parental consent** — account pairing, consent token flow.
+
+## Genuine remaining gaps before production launch
+
+- **Copyright licences** — real exam boards (`AQA`, `Edexcel`, `OCR`, etc.) have `board_licence_cleared = FALSE`. No code change required; a human DPO must confirm a signed licence agreement, then run: `UPDATE exam_boards_config SET board_licence_cleared = TRUE, licence_cleared_at = NOW(), licence_reference = '<ref>' WHERE board_code = '<code>';`
+- **DPIA sign-off** — school report upload (F2) requires DPO sign-off before enabling for end users. The code is compliant; this is a governance step.
+- **DPO sign-off on parent-initiated account model** — required before launch.
+- **AADC Standard 6 review** — streak mechanic (F16) feature flag must remain off until the age-appropriate design code review is complete.
+- **Evidence snippets (C5)** — `diagnostic_results.evidence_snippets` field-level encryption (per-record KMS key) is not yet implemented. The field is NULL in all writes until the KMS key derivation path (TODO [C5] in `diagnostic.worker.ts`) is built.
+- **Production S3 and AWS config** — the upload feature requires AWS credentials and a bucket in `eu-west-2`. See `.env.example`.
+
+## Pre-launch checklist
+
+- [ ] Copyright licence confirmed from at least one real exam board → `UPDATE exam_boards_config SET board_licence_cleared = TRUE ...`
 - [ ] DPO sign-off on parent-initiated account model
-- [ ] DPIA completed for school report upload (F2)
-- [ ] PDF text extraction library selected (see `apps/api/src/workers/diagnostic.worker.ts` TODO)
-- [ ] Diagnostic quiz backend route wired (F3)
+- [ ] DPIA completed and signed off for school report upload (F2)
 - [ ] AADC Standard 6 review of streak mechanic (F16) before enabling the feature flag
+- [ ] C5 evidence snippets KMS encryption implemented (TODO [C5] in diagnostic.worker.ts)
+- [ ] Production AWS credentials and S3 bucket configured in `eu-west-2`
